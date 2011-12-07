@@ -1,0 +1,26 @@
+# HG changeset patch
+# User Kaitlin Rupert <karupert@us.ibm.com>
+# Date 1259893229 28800
+# Node ID 3e7b324f52e408cffa7f4fcc35296173f308c921
+# Parent  3ceede4c5d356eb61b759a09f9a2751793247c1d
+Remove duplicate code in _netpool_member_of()
+
+Signed-off-by: Kaitlin Rupert <karupert@us.ibm.com>
+
+--- a/src/Virt_DevicePool.c	Thu Dec 03 15:18:11 2009 -0800
++++ b/src/Virt_DevicePool.c	Thu Dec 03 18:20:29 2009 -0800
+@@ -490,12 +490,6 @@
+                 goto out;
+         }
+ 
+-        if (ndev->source == NULL) {
+-                CU_DEBUG("Unable to determine pool since no network "
+-                         "source defined");
+-                goto out;
+-        }
+-
+         if (STREQ(ndev->type, "bridge"))
+                 net = bridge_to_network(conn, ndev->source);
+         else if (STREQ(ndev->type, "network"))
+
+

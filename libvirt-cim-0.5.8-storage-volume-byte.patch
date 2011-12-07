@@ -1,0 +1,116 @@
+# HG changeset patch
+# User Kaitlin Rupert <karupert@us.ibm.com>
+# Date 1263415515 28800
+# Node ID b57ba34c0932d77e11f65282dec5c2094d6ba818
+# Parent  2e80fd8fdbc575decc0b8a1623f8b9ad9122dccf
+Fix storage volume generation so that bytes are supported
+
+If the units portion of the <capacity> tag isn't specified, then libvirt
+will create the storage volume using bytes as the unit type.  libvirt-cim
+wasn't supporting this behavior properl.  Instead of assuming gigabytes as the
+default, libvirt will assume bytes when no unit is specified.
+
+If a unit is specified, it needs to be one of the following supported types:
+ 'k', 'K', 'm', 'M', 'g', 'G', 't', 'T', 'p', 'P', 'y', or 'Y'.
+
+Signed-off-by: Kaitlin Rupert <karupert@us.ibm.com>
+
+--- a/libxkutil/xmlgen.c	Fri Dec 11 18:04:28 2009 -0800
++++ b/libxkutil/xmlgen.c	Wed Jan 13 12:45:15 2010 -0800
+@@ -1129,8 +1129,12 @@
+ 
+         free(string);
+ 
+-        if (xmlNewProp(cap, BAD_CAST "unit", BAD_CAST vol->cap_units) == NULL)
+-                goto out;
++        if (vol->cap_units != NULL) {
++                xmlAttrPtr tmp = NULL;
++                tmp = xmlNewProp(cap, BAD_CAST "unit", BAD_CAST vol->cap_units);
++                if (tmp == NULL)
++                        goto out;
++        }
+ 
+         target = xmlNewChild(v, NULL, BAD_CAST "target", NULL);
+         if (target == NULL)
+--- a/src/Virt_ResourcePoolConfigurationService.c	Fri Dec 11 18:04:28 2009 -0800
++++ b/src/Virt_ResourcePoolConfigurationService.c	Wed Jan 13 12:45:15 2010 -0800
+@@ -727,10 +727,10 @@
+         res->res.storage_vol.cap = int_val;
+ 
+         free(res->res.storage_vol.cap_units);
+-        if (cu_get_str_prop(inst, "AllocationUnits", &val) != CMPI_RC_OK)
+-                res->res.storage_vol.cap_units = strdup("G");
++        if (cu_get_str_prop(inst, "AllocationUnits", &val) == CMPI_RC_OK)
++                res->res.storage_vol.cap_units = strdup(val);
+         else
+-                res->res.storage_vol.cap_units = strdup(val);
++                res->res.storage_vol.cap_units = NULL;
+ 
+  out:
+ 
+--- a/src/Virt_SettingsDefineCapabilities.c	Fri Dec 11 18:04:28 2009 -0800
++++ b/src/Virt_SettingsDefineCapabilities.c	Wed Jan 13 12:45:15 2010 -0800
+@@ -1044,10 +1044,11 @@
+ }
+ 
+ #if VIR_USE_LIBVIRT_STORAGE
+-static CMPIStatus new_volume_template(const CMPIObjectPath *ref,
+-                                      int template_type,
+-                                      virStoragePoolPtr poolptr,
+-                                      struct inst_list *list)
++static CMPIStatus _new_volume_template(const CMPIObjectPath *ref,
++                                       int template_type,
++                                       virStoragePoolPtr poolptr,
++                                       const char *units,
++                                       struct inst_list *list)
+ {
+         const char *id;
+         CMPIStatus s = {CMPI_RC_OK, NULL};
+@@ -1059,7 +1060,6 @@
+         const char *path;
+         uint16_t alloc = 0;
+         uint16_t cap = 0;
+-        const char *units;
+ 
+         switch(template_type) {
+         case SDC_RASD_MIN:
+@@ -1116,8 +1116,9 @@
+         cap = 0;
+         CMSetProperty(inst, "Capacity", (CMPIValue *)&cap, CMPI_uint16);
+ 
+-        units = "G";
+-        CMSetProperty(inst, "AllocationUnits", (CMPIValue *)units, CMPI_chars);
++        if (units != NULL)
++                CMSetProperty(inst, "AllocationUnits", 
++                              (CMPIValue *)units, CMPI_chars);
+ 
+         inst_list_add(list, inst);
+ 
+@@ -1127,6 +1128,25 @@
+         return s;
+ }
+ 
++static CMPIStatus new_volume_template(const CMPIObjectPath *ref,
++                                      int template_type,
++                                      virStoragePoolPtr poolptr,
++                                      struct inst_list *list)
++{
++        CMPIStatus s = {CMPI_RC_OK, NULL};
++        const char *units = NULL;
++
++        s = _new_volume_template(ref, template_type, poolptr, units, list);
++        if (s.rc != CMPI_RC_OK)
++                goto out;
++
++        units = "G";
++        s = _new_volume_template(ref, template_type, poolptr, units, list);
++
++ out:
++        return s;
++}
++
+ static CMPIStatus avail_volume_template(const CMPIObjectPath *ref,
+                                         int template_type,
+                                         virStorageVolPtr volume_ptr,
+
+

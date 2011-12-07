@@ -1,0 +1,222 @@
+diff -r b57ba34c0932 -r 5b37fac83727 libxkutil/device_parsing.c
+--- a/libxkutil/device_parsing.c	Wed Jan 13 12:45:15 2010 -0800
++++ b/libxkutil/device_parsing.c	Thu Jan 28 15:45:31 2010 -0800
+@@ -64,6 +64,7 @@
+         free(dev->mac);
+         free(dev->source);
+         free(dev->model);
++        free(dev->device);
+ }
+ 
+ static void cleanup_emu_device(struct emu_device *dev)
+@@ -311,6 +312,10 @@
+                         if (ndev->source != NULL)
+                                 continue;
+                         goto err;
++                } else if (XSTREQ(child->name, "target")) {
++                        ndev->device = get_attr_value(child, "dev");
++                        if (ndev->device == NULL)
++                                goto err;
+                 } else if (XSTREQ(child->name, "model")) {
+                         ndev->model = get_attr_value(child, "type");
+                         if (ndev->model == NULL)
+@@ -660,6 +665,7 @@
+                 DUP_FIELD(dev, _dev, dev.net.type);
+                 DUP_FIELD(dev, _dev, dev.net.source);
+                 DUP_FIELD(dev, _dev, dev.net.model);
++                DUP_FIELD(dev, _dev, dev.net.device);
+         } else if (dev->type == CIM_RES_TYPE_DISK) {
+                 DUP_FIELD(dev, _dev, dev.disk.type);
+                 DUP_FIELD(dev, _dev, dev.disk.device);
+diff -r b57ba34c0932 -r 5b37fac83727 libxkutil/device_parsing.h
+--- a/libxkutil/device_parsing.h	Wed Jan 13 12:45:15 2010 -0800
++++ b/libxkutil/device_parsing.h	Thu Jan 28 15:45:31 2010 -0800
+@@ -50,6 +50,7 @@
+         char *mac;
+         char *source;
+         char *model;
++        char *device;
+ };
+ 
+ struct mem_device {
+diff -r b57ba34c0932 -r 5b37fac83727 libxkutil/xmlgen.c
+--- a/libxkutil/xmlgen.c	Wed Jan 13 12:45:15 2010 -0800
++++ b/libxkutil/xmlgen.c	Thu Jan 28 15:45:31 2010 -0800
+@@ -217,6 +217,14 @@
+                         return XML_ERROR;
+                 xmlNewProp(tmp, BAD_CAST "address", BAD_CAST net->mac);
+ 
++                if (net->device != NULL) {
++                        tmp = xmlNewChild(nic, NULL, BAD_CAST "target", NULL);
++                        if (tmp == NULL)
++                                return XML_ERROR;
++                        xmlNewProp(tmp, BAD_CAST "dev", BAD_CAST net->device);
++                }
++
++
+                 if (net->model != NULL) {
+                         tmp = xmlNewChild(nic, NULL, BAD_CAST "model", NULL);
+                         if (tmp == NULL)
+diff -r b57ba34c0932 -r 5b37fac83727 schema/ResourceAllocationSettingData.mof
+--- a/schema/ResourceAllocationSettingData.mof	Wed Jan 13 12:45:15 2010 -0800
++++ b/schema/ResourceAllocationSettingData.mof	Thu Jan 28 15:45:31 2010 -0800
+@@ -60,6 +60,8 @@
+       [Description ("Bridge name")]
+       string NetworkName;
+ 
++      [Description ("Target device as seen by the guest")]
++      string VirtualDevice;
+ };
+ 
+ [Description ("KVM virtual network configuration"),
+@@ -74,6 +76,8 @@
+       [Description ("Bridge name")]
+       string NetworkName;
+ 
++      [Description ("Target device as seen by the guest")]
++      string VirtualDevice;
+ };
+ 
+ [Description ("LXC virtual network configuration"),
+@@ -81,6 +85,8 @@
+ ]
+ class LXC_NetResourceAllocationSettingData : LXC_ResourceAllocationSettingData
+ {
++      [Description ("Target device as seen by the guest")]
++      string VirtualDevice;
+ };
+ 
+ [Description ("Xen virtual processor"),
+diff -r b57ba34c0932 -r 5b37fac83727 src/Virt_RASD.c
+--- a/src/Virt_RASD.c	Wed Jan 13 12:45:15 2010 -0800
++++ b/src/Virt_RASD.c	Thu Jan 28 15:45:31 2010 -0800
+@@ -278,6 +278,45 @@
+         return s;
+ }
+ 
++static CMPIStatus set_net_rasd_params(const CMPIBroker *broker,
++                                       const CMPIObjectPath *ref,
++                                       const struct virt_device *dev,
++                                       CMPIInstance *inst)
++{
++        CMPIStatus s = {CMPI_RC_OK, NULL};
++
++        CMSetProperty(inst,
++                      "NetworkType",
++                      (CMPIValue *)dev->dev.net.type,
++                      CMPI_chars);
++
++        CMSetProperty(inst,
++                      "Address",
++                      (CMPIValue *)dev->dev.net.mac,
++                      CMPI_chars);
++
++        if ((dev->dev.net.source != NULL) &&
++            (STREQ(dev->dev.net.type, "bridge")))
++                CMSetProperty(inst,
++                              "NetworkName",
++                              (CMPIValue *)dev->dev.net.source,
++                              CMPI_chars);
++
++        if (dev->dev.net.device != NULL)
++                CMSetProperty(inst,
++                              "VirtualDevice",
++                              (CMPIValue *)dev->dev.net.device,
++                              CMPI_chars);
++
++        if (dev->dev.net.model != NULL)
++                CMSetProperty(inst,
++                              "ResourceSubType",
++                              (CMPIValue *)dev->dev.net.model,
++                              CMPI_chars);
++
++        return s;
++}
++
+ static CMPIStatus set_graphics_rasd_params(const struct virt_device *dev,
+                                            CMPIInstance *inst,
+                                            const char *name,
+@@ -429,27 +468,7 @@
+         if (dev->type == CIM_RES_TYPE_DISK) {
+                 s = set_disk_rasd_params(broker, ref, dev, inst);
+         } else if (dev->type == CIM_RES_TYPE_NET) {
+-                CMSetProperty(inst,
+-                              "NetworkType",
+-                              (CMPIValue *)dev->dev.net.type,
+-                              CMPI_chars);
+-                CMSetProperty(inst,
+-                              "Address",
+-                              (CMPIValue *)dev->dev.net.mac,
+-                              CMPI_chars);
+-
+-                if ((dev->dev.net.source != NULL) 
+-                   && (STREQ(dev->dev.net.type, "bridge")))
+-                        CMSetProperty(inst,
+-                                      "NetworkName",
+-                                      (CMPIValue *)dev->dev.net.source,
+-                                      CMPI_chars);
+-
+-                if (dev->dev.net.model != NULL)
+-                        CMSetProperty(inst,
+-                                      "ResourceSubType",
+-                                      (CMPIValue *)dev->dev.net.model,
+-                                      CMPI_chars);
++                s = set_net_rasd_params(broker, ref, dev, inst);
+         } else if (dev->type == CIM_RES_TYPE_MEM) {
+                 const char *units = "KiloBytes";
+ 
+diff -r b57ba34c0932 -r 5b37fac83727 src/Virt_SettingsDefineCapabilities.c
+--- a/src/Virt_SettingsDefineCapabilities.c	Wed Jan 13 12:45:15 2010 -0800
++++ b/src/Virt_SettingsDefineCapabilities.c	Thu Jan 28 15:45:31 2010 -0800
+@@ -546,6 +546,7 @@
+                                 const char *net_type,
+                                 const char *net_name,
+                                 uint64_t num_nics,
++                                const char *device,
+                                 const char *model,
+                                 struct inst_list *list)
+ {
+@@ -565,6 +566,10 @@
+                       (CMPIValue *)&num_nics, CMPI_uint64);
+ 
+         if (model != NULL)
++                CMSetProperty(inst, "VirtualDevice", 
++                             (CMPIValue *)device, CMPI_chars);
++
++        if (model != NULL)
+                 CMSetProperty(inst, "ResourceSubType", 
+                              (CMPIValue *)model, CMPI_chars);
+ 
+@@ -584,6 +589,7 @@
+         CMPIStatus s = {CMPI_RC_OK, NULL};
+         int i,j;
+         const char *type[] = {"network", "bridge", "user"};
++        const char *device[] = {"vtap1", NULL};
+         const char *model[] = {"e1000", NULL};
+         const char *name[] = {NULL, "br0", NULL};
+ 
+@@ -622,6 +628,7 @@
+                                           type[i], 
+                                           name[i], 
+                                           num_nics, 
++                                          device[j], 
+                                           model[j], 
+                                           list);
+                         if (s.rc != CMPI_RC_OK)
+diff -r b57ba34c0932 -r 5b37fac83727 src/Virt_VirtualSystemManagementService.c
+--- a/src/Virt_VirtualSystemManagementService.c	Wed Jan 13 12:45:15 2010 -0800
++++ b/src/Virt_VirtualSystemManagementService.c	Thu Jan 28 15:45:31 2010 -0800
+@@ -752,6 +752,13 @@
+                 dev->dev.net.type = strdup(USER_TYPE);
+         } else
+                 return "Invalid Network Type specified";
++
++        free(dev->dev.net.device);
++        if (cu_get_str_prop(inst, "VirtualDevice", &val) != CMPI_RC_OK)
++                dev->dev.net.device = NULL; 
++        else 
++                dev->dev.net.device = strdup(val);
++
+         free(dev->dev.net.model);
+ 
+         if (cu_get_str_prop(inst, "ResourceSubType", &val) != CMPI_RC_OK)

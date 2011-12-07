@@ -1,0 +1,108 @@
+
+# HG changeset patch
+# User Kaitlin Rupert <karupert@us.ibm.com>
+# Date 1260387726 28800
+# Node ID 54c432d2bec6493cbbd3fa7c5a28b2e461014f68
+# Parent  3e7b324f52e408cffa7f4fcc35296173f308c921
+Revert net->name to net->source
+
+For Xen guests, a network device is turned into a bridge device.  However,
+the network resource still belongs to the virtual network pool.  This change
+makes sure the bridge name is written to the source field of the net struct so
+that look ups in Virt_DevicePool.c work properly.
+
+Signed-off-by: Kaitlin Rupert <karupert@us.ibm.com>
+
+--- a/libxkutil/device_parsing.c	Thu Dec 03 18:20:29 2009 -0800
++++ b/libxkutil/device_parsing.c	Wed Dec 09 11:42:06 2009 -0800
+@@ -304,8 +304,8 @@
+                         if (ndev->mac == NULL)
+                                 goto err;
+                 } else if (XSTREQ(child->name, "source")) {
+-                        ndev->name = get_attr_value(child, "bridge");
+-                        if (ndev->name != NULL)
++                        ndev->source = get_attr_value(child, "bridge");
++                        if (ndev->source != NULL)
+                                 continue;
+                         ndev->source = get_attr_value(child, "network");
+                         if (ndev->source != NULL)
+@@ -659,7 +659,6 @@
+                 DUP_FIELD(dev, _dev, dev.net.mac);
+                 DUP_FIELD(dev, _dev, dev.net.type);
+                 DUP_FIELD(dev, _dev, dev.net.source);
+-                DUP_FIELD(dev, _dev, dev.net.name);
+                 DUP_FIELD(dev, _dev, dev.net.model);
+         } else if (dev->type == CIM_RES_TYPE_DISK) {
+                 DUP_FIELD(dev, _dev, dev.disk.type);
+--- a/libxkutil/device_parsing.h	Thu Dec 03 18:20:29 2009 -0800
++++ b/libxkutil/device_parsing.h	Wed Dec 09 11:42:06 2009 -0800
+@@ -50,7 +50,6 @@
+         char *mac;
+         char *source;
+         char *model;
+-        char *name;
+ };
+ 
+ struct mem_device {
+--- a/libxkutil/xmlgen.c	Thu Dec 03 18:20:29 2009 -0800
++++ b/libxkutil/xmlgen.c	Wed Dec 09 11:42:06 2009 -0800
+@@ -165,12 +165,7 @@
+ {
+         xmlNodePtr tmp;
+ 
+-        if ((STREQC(src_type, "bridge")) && (dev->name != NULL)) {
+-                tmp = xmlNewChild(nic, NULL, BAD_CAST "source", NULL);
+-                if (tmp == NULL) 
+-                        return XML_ERROR;
+-                xmlNewProp(tmp, BAD_CAST src_type, BAD_CAST dev->name);
+-        } else if ((STREQC(src_type, "network")) && (dev->source != NULL)) {
++        if (dev->source != NULL) {
+                 tmp = xmlNewChild(nic, NULL, BAD_CAST "source", NULL);
+                 if (tmp == NULL) 
+                         return XML_ERROR;
+--- a/src/Virt_RASD.c	Thu Dec 03 18:20:29 2009 -0800
++++ b/src/Virt_RASD.c	Wed Dec 09 11:42:06 2009 -0800
+@@ -435,11 +435,11 @@
+                               (CMPIValue *)dev->dev.net.mac,
+                               CMPI_chars);
+ 
+-                if ((dev->dev.net.name != NULL) && 
+-                     (STREQ(dev->dev.net.type, "bridge")))
++                if ((dev->dev.net.source != NULL) 
++                   && (STREQ(dev->dev.net.type, "bridge")))
+                         CMSetProperty(inst,
+                                       "NetworkName",
+-                                      (CMPIValue *)dev->dev.net.name,
++                                      (CMPIValue *)dev->dev.net.source,
+                                       CMPI_chars);
+ 
+                 if (dev->dev.net.model != NULL)
+--- a/src/Virt_VirtualSystemManagementService.c	Thu Dec 03 18:20:29 2009 -0800
++++ b/src/Virt_VirtualSystemManagementService.c	Wed Dec 09 11:42:06 2009 -0800
+@@ -720,15 +720,15 @@
+         dev->id = strdup(dev->dev.net.mac);
+ 
+         free(dev->dev.net.type);
+-        free(dev->dev.net.name);
+         if (cu_get_str_prop(inst, "NetworkType", &val) != CMPI_RC_OK) 
+                 return "No Network Type specified";
+ 
++        free(dev->dev.net.source);
+         if (STREQC(val, BRIDGE_TYPE)) {
+                 dev->dev.net.type = strdup(BRIDGE_TYPE);
+                 if (cu_get_str_prop(inst, "NetworkName", &val) == CMPI_RC_OK) 
+                         if (strlen(val) > 0)
+-                                dev->dev.net.name = strdup(val);
++                                dev->dev.net.source = strdup(val);
+                         else
+                                 return "Bridge name is empty";
+                 else 
+@@ -741,7 +741,6 @@
+                 if (val == NULL)
+                         return "No NetworkPool specified no default available";
+ 
+-                free(dev->dev.net.source);
+                 network = name_from_pool_id(val);
+                 if (network == NULL) {
+                         msg = "PoolID specified is not formatted properly";
+

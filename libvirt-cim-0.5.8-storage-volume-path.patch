@@ -1,0 +1,121 @@
+# HG changeset patch
+# User Sharad Mishra <snmishra@us.ibm.com>
+# Date 1269387101 25200
+# Node ID 22a4721a2d978fe611cb75255a094a0cc23abe5c
+# Parent  4ee7c4354bc550780bc02ef1f69fbda387b3fe13
+(#2) Use libvirt to get StorageVolume Path to set SV InstanceID.
+
+Updates:
+	Coding style and free path pointer.
+
+InstanceID of a StorageVolume was set using the 'Path' field of StorageVolume RASD. If 'Path' was not set by the user, the InstanceID would be invalid. This patch fixed the issue by using libvirt to get the storage volume path. The path returned by libvirt is used to set the InstanceID.
+
+Signed-off-by: Sharad Mishra <snmishra@us.ibm.com>
+
+--- a/libxkutil/pool_parsing.c	Tue Mar 02 15:23:45 2010 -0800
++++ b/libxkutil/pool_parsing.c	Tue Mar 23 16:31:41 2010 -0700
+@@ -353,12 +353,12 @@
+ }
+ 
+ #if VIR_USE_LIBVIRT_STORAGE
+-int create_resource(virConnectPtr conn,
+-                    const char *pname,
+-                    const char *xml,
+-                    int res_type)
++char *create_resource(virConnectPtr conn,
++                      const char *pname,
++                      const char *xml,
++                      int res_type)
+ {
+-        int ret = 0;
++        char *path = NULL;
+         virStoragePoolPtr ptr = NULL;
+         virStorageVolPtr vptr = NULL;
+ 
+@@ -376,14 +376,19 @@
+                         goto out;
+                 }
+ 
+-                ret = 1;
++                path = virStorageVolGetPath(vptr);
++                if (path == NULL) {
++                        CU_DEBUG("Unable to get storage volume path");
++                        goto out;
++                }
++
+         }
+ 
+  out:
+         virStoragePoolFree(ptr);
+         virStorageVolFree(vptr);
+ 
+-        return ret;
++        return path;
+ }
+ 
+ int delete_resource(virConnectPtr conn,
+@@ -414,13 +419,13 @@
+         return ret;
+ }
+ #else
+-int create_resource(virConnectPtr conn,
+-                    const char *pname,
+-                    const char *xml,
+-                    int res_type)
++char *create_resource(virConnectPtr conn,
++                      const char *pname,
++                      const char *xml,
++                      int res_type)
+ {
+           CU_DEBUG("Creating resources within libvirt pools not supported");
+-          return 0;
++          return NULL;
+ }
+ 
+ int delete_resource(virConnectPtr conn,
+--- a/libxkutil/pool_parsing.h	Tue Mar 02 15:23:45 2010 -0800
++++ b/libxkutil/pool_parsing.h	Tue Mar 23 16:31:41 2010 -0700
+@@ -90,8 +90,8 @@
+ int define_pool(virConnectPtr conn, const char *xml, int res_type);
+ int destroy_pool(virConnectPtr conn, const char *name, int res_type);
+ 
+-int create_resource(virConnectPtr conn, const char *pname,
+-                    const char *xml, int res_type);
++char *create_resource(virConnectPtr conn, const char *pname,
++                      const char *xml, int res_type);
+ 
+ int delete_resource(virConnectPtr conn, const char *rname, int res_type);
+ 
+--- a/src/Virt_ResourcePoolConfigurationService.c	Tue Mar 02 15:23:45 2010 -0800
++++ b/src/Virt_ResourcePoolConfigurationService.c	Tue Mar 23 16:31:41 2010 -0700
+@@ -832,6 +832,7 @@
+ {
+         virConnectPtr conn;
+         CMPIInstance *inst = NULL;
++        char *path = NULL;
+ 
+         conn = connect_by_classname(_BROKER, CLASSNAME(ref), s);
+         if (conn == NULL) {
+@@ -839,7 +840,8 @@
+                 return NULL;
+         }
+ 
+-        if (create_resource(conn, res->pool_id, xml, res->type) == 0) {
++        path = create_resource(conn, res->pool_id, xml, res->type); 
++        if (path == NULL) {
+                 virt_set_status(_BROKER, s,
+                                 CMPI_RC_ERR_FAILED,
+                                 conn,
+@@ -855,7 +857,10 @@
+                            "Failed to lookup resulting resource");
+         }
+ 
++        CMSetProperty(inst, "InstanceID", (CMPIValue *)path, CMPI_chars);
++
+  out:
++        free(path);
+         virConnectClose(conn);
+ 
+         return inst;
+
+
